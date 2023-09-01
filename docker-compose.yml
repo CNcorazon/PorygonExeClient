@@ -1,0 +1,17 @@
+version: '3'
+services:
+  order:
+    image: execute-image
+    deploy:
+      mode: replicated
+      replicas: 100
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 500M
+    networks:
+      - execute-network
+
+networks:
+  execute-network:
+    driver: bridge
