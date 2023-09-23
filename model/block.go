@@ -103,4 +103,11 @@ type (
 		Height  uint
 		Message string
 	}
+	GetProposalRequest struct {
+		Height   int
+		Identity string
+	}
+	GetProposalResponse struct {
+		ProposalBlocks []structure.Block
+	}
 )

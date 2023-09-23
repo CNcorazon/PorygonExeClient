@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/pochard/commons/randstr"
 )
@@ -19,11 +20,33 @@ type (
 	}
 
 	Account struct {
+		Id      int
 		Shard   uint
 		Address string
 		Value   int
 	}
+	LockedAccount struct {
+		AccountsByID   map[int]Account // Use a map to store accounts for quick access
+		AccountsByAddr map[string]int
+		Locked         map[int]bool // Store locked account Ids
+	}
 )
+
+func NewLockedAccount() *LockedAccount {
+	return &LockedAccount{
+		AccountsByID:   make(map[int]Account),
+		AccountsByAddr: make(map[string]int),
+		Locked:         make(map[int]bool),
+	}
+}
+
+func (la *LockedAccount) IsAccountAccessible(accountAddress string) bool {
+	accountId, exists := la.AccountsByAddr[accountAddress]
+	if !exists {
+		return false
+	}
+	return !la.Locked[accountId]
+}
 
 //计算账户的状态
 func (s *State) CalculateRoot(shard uint) string {
@@ -43,30 +66,98 @@ func (s *State) AppendAccount(acc Account) {
 	// s.LogState(0)
 	log.Printf("分片%v添加账户成功，账户地址为%v\n", acc.Shard, key)
 }
+func findMissingNumbers(lockedAccount []int) []int {
+	// 创建一个map用于记录出现过的数字
+	appeared := make(map[int]bool)
 
-// 验证交易，返回账户的树根
-func UpdateState(tran TransactionBlock, height uint, s *State, shard uint) (string, map[uint][]SuperTransaction) {
+	// 标记出现过的数字
+	for _, num := range lockedAccount {
+		appeared[num] = true
+	}
+
+	// 找到未出现的数字
+	var missingNumbers []int
+	for i := 0; i <= 1000; i++ {
+		if !appeared[i] {
+			missingNumbers = append(missingNumbers, i)
+		}
+	}
+
+	return missingNumbers
+}
+
+// UpdateState 验证交易，返回账户的树根
+func UpdateState(tran TransactionBlock, lockedAccountID []int, accounts []Account, height uint, s *State, shard uint) (string, map[uint][]SuperTransaction, int) {
 	//处理超级交易
 	Super := tran.SuperList
 	IntTraList := tran.InternalList
 	CroShaList := tran.CrossShardList
 	SuList := make(map[uint][]SuperTransaction)
 
-	// for i := 1; i <= ShardNum; i++ {
-	for _, tran := range Super[shard] {
-		ExcuteRelay(tran, s, int(shard))
+	lockedAccounts := NewLockedAccount()
+	for _, acc := range accounts {
+		lockedAccounts.AccountsByID[acc.Id] = acc
+		lockedAccounts.AccountsByAddr[acc.Address] = acc.Id
+	}
+	for _, id := range lockedAccountID {
+		lockedAccounts.Locked[id] = true
+	}
+	var wg1 sync.WaitGroup
+	var wg2 sync.WaitGroup
+	accessibleTransactions1 := make(chan InternalTransaction)
+	accessibleTransactions2 := make(chan CrossShardTransaction)
+	for _, tx := range IntTraList[shard] {
+		wg1.Add(1)
+		go func(trans InternalTransaction) {
+			defer wg1.Done()
+			if lockedAccounts.IsAccountAccessible(trans.From) && lockedAccounts.IsAccountAccessible(trans.To) {
+				accessibleTransactions1 <- trans
+			}
+		}(tx)
+	}
+
+	go func() {
+		wg1.Wait()
+		close(accessibleTransactions1)
+	}()
+
+	for _, tx := range CroShaList[shard] {
+		wg2.Add(1)
+		go func(trans CrossShardTransaction) {
+			defer wg2.Done()
+			if lockedAccounts.IsAccountAccessible(trans.From) && lockedAccounts.IsAccountAccessible(trans.To) {
+				accessibleTransactions2 <- trans
+			}
+		}(tx)
+	}
+
+	go func() {
+		wg2.Wait()
+		close(accessibleTransactions2)
+	}()
+
+	var count int
+
+	for _, trans := range Super[shard] {
+		ExcuteRelay(trans, s, int(shard))
+		count++
 	}
 	//处理内部交易
-	for _, tran := range IntTraList[shard] {
-		ExcuteInteral(tran, s, int(shard))
+	for trans := range accessibleTransactions1 {
+		//if lockedAccounts.IsAccountAccessible(trans.From) && lockedAccounts.IsAccountAccessible(trans.To) {
+		ExcuteInteral(trans, s, int(shard))
+		count++
 	}
+	//}
 	//处理跨分片交易
-	for _, tran := range CroShaList[shard] {
-		res := ExcuteCross(tran, height, s, int(shard))
+	for trans := range accessibleTransactions2 {
+		//if lockedAccounts.IsAccountAccessible(trans.From) && lockedAccounts.IsAccountAccessible(trans.To) {
+		res := ExcuteCross(trans, height, s, int(shard))
 		SuList[res.Shard] = append(SuList[res.Shard], *res)
+		count++
+		//}
 	}
-	// }
-	return s.CalculateRoot(shard), SuList
+	return s.CalculateRoot(shard), SuList, count
 }
 
 func ExcuteInteral(i InternalTransaction, s *State, shardNum int) {
@@ -197,11 +288,9 @@ func InitState(s uint, n int, shardNum int) *State {
 	return &state
 }
 
-//前端根据传输来的账户的状态重新构造全局状态
-func MakeStateWithAccount(s uint, acc []Account, gsroot GSRoot) *State {
+func MakeStateWithAccount(s uint, acc []Account) *State {
 	state := State{
 		Shard:      s,
-		RootsVote:  make(map[uint]map[string]int),
 		AccountMap: make(map[uint]map[string]*Account),
 	}
 	for i := 1; i <= ShardNum; i++ {
@@ -210,7 +299,6 @@ func MakeStateWithAccount(s uint, acc []Account, gsroot GSRoot) *State {
 	for _, account := range acc {
 		state.AccountMap[account.Shard][account.Address] = &account
 	}
-	state.RootsVote = gsroot.Vote
 	return &state
 }
 
@@ -224,8 +312,8 @@ func (s *State) LogState(height uint) {
 	}
 }
 
-//根据区块更新世界状态
-func UpdateStateWithTxBlock(transaction TransactionBlock, height uint, s *State, shard uint) (string, map[uint][]SuperTransaction) {
-	root, SuList := UpdateState(transaction, height, s, shard)
-	return root, SuList
+// UpdateStateWithTxBlock 根据区块更新世界状态
+func UpdateStateWithTxBlock(transaction TransactionBlock, lockedAccounts []int, accounts []Account, height uint, s *State, shard uint) (string, map[uint][]SuperTransaction, int) {
+	root, SuList, count := UpdateState(transaction, lockedAccounts, accounts, height, s, shard)
+	return root, SuList, count
 }

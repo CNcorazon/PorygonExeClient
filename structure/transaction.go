@@ -28,10 +28,12 @@ type (
 	}
 
 	SuperTransaction struct {
-		Shard uint
-		To    string
-		Value int
-		// Signature []PubKeySign
+		FromShard uint
+		Shard     uint
+		From      string
+		To        string
+		Value     int
+		// Signature PubKeySign
 	}
 )
 

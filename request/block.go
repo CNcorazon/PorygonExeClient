@@ -220,3 +220,23 @@ func UploadRoot(shardNum uint, height uint, tx_num int, root string, SuList map[
 	json.Unmarshal(body, &res)
 	return res
 }
+
+func GetProposalBlock(httpurl string, route string, req model.GetProposalRequest) model.GetProposalResponse {
+	URL := httpurl + route
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		log.Println(err)
+	}
+	request, _ := http.NewRequest("POST", URL, bytes.NewBuffer(jsonData))
+	request.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		panic(err)
+	}
+	body, _ := ioutil.ReadAll(response.Body)
+
+	var res model.GetProposalResponse
+	json.Unmarshal(body, &res)
+	return res
+}

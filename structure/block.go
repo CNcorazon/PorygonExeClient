@@ -28,10 +28,26 @@ type (
 	BlockBody struct {
 		// Shard            uint
 		Height           uint
+		LockedAccount    []int
 		TransactionRoots map[uint]string
 		// SuperTransaction SuperTransactionBlock_Consensus
 	}
-
+	Proposal struct {
+		Shard         uint
+		Height        uint
+		InternalBatch []Batchtrans
+		CrossBatch    []Batchtrans
+		SuperBatch    []Batchtrans
+	}
+	Batchtrans struct {
+		Id             int
+		Shard          int
+		Abstract       string
+		RelatedAccount []int // 第一维是内部交易的，第二维是跨分片from方的，第三维是跨分片to方的
+		PubIndex       []int
+		Sig            string
+		TransType      int
+	}
 	GSRoot struct {
 		StateRoot string
 		Vote      map[uint]map[string]int //记录每个执行分片计算出的subTreeRoot以及对应的票数
@@ -44,6 +60,18 @@ type (
 		CrossShardList map[uint][]CrossShardTransaction
 		SuperList      map[uint][]SuperTransaction //需要被打包进这个区块内部的SueprList
 		Sign           PubKeySign
+	}
+
+	// ProposalBlock 共识阶段：排序委员会提出的proposal block
+	ProposalBlock struct {
+		Id            string
+		IdList        []string
+		LockedAccount []int
+		Height        int
+		Hash          string     //前一个区块的hash
+		Root          GSRoot     //状态树树根
+		ProposalList  []Proposal //交易列表
+		Vrf           int        //vrf
 	}
 
 	// TransactionBlock_Consensus struct {
